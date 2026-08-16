@@ -11,12 +11,17 @@ from paper_agent.chunker import chunk_document
 from paper_agent.loader import PaperLoadError, load_paper
 
 
-DEFAULT_MODEL = "llama3.1"
-DEFAULT_MAX_CHARS = 6000
+DEFAULT_MODEL = "qwen3.5:9b-q8_0"
+DEFAULT_MAX_CHARS = 3000
+DEFAULT_NUM_CTX = 8192
+DEFAULT_NUM_PREDICT = 2048
 ALLOWED_DIR_ENV = "PAPER_AGENT_ALLOWED_DIR"
 
 
-def load_paper_for_analysis(path: str, max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
+def load_paper_for_analysis(
+    path: str,
+    max_chars: int = DEFAULT_MAX_CHARS,
+) -> dict[str, Any]:
     """Load one PDF, txt, or md paper and return chunked text with source locations."""
     try:
         safe_path = _resolve_allowed_paper_path(path)
@@ -40,6 +45,8 @@ def load_paper_for_analysis(path: str, max_chars: int = DEFAULT_MAX_CHARS) -> di
         "title": document.title,
         "source": document.path,
         "chunk_count": len(document.chunks),
+        "returned_chunk_count": len(document.chunks),
+        "truncated": False,
         "unreadable_pages": document.unreadable_pages,
         "chunks": [
             {
@@ -52,7 +59,10 @@ def load_paper_for_analysis(path: str, max_chars: int = DEFAULT_MAX_CHARS) -> di
     }
 
 
-def load_papers_for_comparison(paths: list[str], max_chars: int = DEFAULT_MAX_CHARS) -> dict[str, Any]:
+def load_papers_for_comparison(
+    paths: list[str],
+    max_chars: int = DEFAULT_MAX_CHARS,
+) -> dict[str, Any]:
     """Load multiple papers for comparison using the same chunking policy."""
     if len(paths) < 2:
         return {
@@ -61,7 +71,10 @@ def load_papers_for_comparison(paths: list[str], max_chars: int = DEFAULT_MAX_CH
             "papers": [],
         }
 
-    papers = [load_paper_for_analysis(path, max_chars=max_chars) for path in paths]
+    papers = [
+        load_paper_for_analysis(path, max_chars=max_chars)
+        for path in paths
+    ]
     errors = [paper.get("error") for paper in papers if not paper.get("ok")]
     return {
         "ok": not errors,
@@ -102,7 +115,15 @@ def _ollama_model() -> LiteLlm:
         os.environ["OLLAMA_API_BASE"] = os.environ["OLLAMA_HOST"]
 
     model = os.environ.get("ADK_OLLAMA_MODEL") or os.environ.get("OLLAMA_MODEL") or DEFAULT_MODEL
-    return LiteLlm(model=f"ollama/{model}")
+    num_ctx = int(os.environ.get("ADK_OLLAMA_NUM_CTX", DEFAULT_NUM_CTX))
+    num_predict = int(os.environ.get("ADK_OLLAMA_NUM_PREDICT", DEFAULT_NUM_PREDICT))
+    return LiteLlm(
+        model=f"ollama/{model}",
+        think=False,
+        temperature=0.2,
+        num_ctx=num_ctx,
+        num_predict=num_predict,
+    )
 
 
 root_agent = Agent(
@@ -110,7 +131,7 @@ root_agent = Agent(
     model=_ollama_model(),
     description="Reads and compares research papers using a local Ollama model.",
     instruction="""
-あなたはローカルLLMで動作する論文読解・比較エージェントです。
+あなたは論文読解・比較エージェントです。
 
 必ず次の方針に従ってください。
 - ユーザーが指定した論文を主な情報源にする。
@@ -118,6 +139,7 @@ root_agent = Agent(
 - 論文に書かれている内容と、あなたの解釈を明確に分ける。
 - 論文本文にない内容は断定せず、「記載なし」または「判断不能」と書く。
 - 根拠は chunk_index と page があれば page を示す。
+- 論文が1つの場合は、研究背景、研究目的、提案手法、実験設定、主な結果、既存手法との違い、研究の限界、今後の発展可能性の観点で整理する。
 - 複数論文を比較するときは、研究背景、研究目的、提案手法、実験設定、主な結果、既存手法との違い、研究の限界、今後の発展可能性の同じ観点で整理する。
 - 研究内容の正しさ、新規性、再現性、数式の妥当性を最終保証しない。
 
@@ -134,6 +156,7 @@ root_agent = Agent(
 10. 不明点
 
 複数論文を比較する場合は、各論文を同じ観点で整理した後、共通点、相違点、判断不能な点を示してください。
+必ずユーザーに見える回答本文を日本語で出力してください。
 """.strip(),
     tools=[
         load_paper_for_analysis,

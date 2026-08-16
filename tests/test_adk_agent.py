@@ -1,9 +1,16 @@
-from paper_agent_adk.agent import load_paper_for_analysis, load_papers_for_comparison, root_agent
+from paper_agent_adk.agent import (
+    load_paper_for_analysis,
+    load_papers_for_comparison,
+    root_agent,
+)
 
 
 def test_adk_root_agent_is_configured():
     assert root_agent.name == "paper_reading_comparison_agent"
     assert len(root_agent.tools) == 2
+    assert root_agent.model._additional_args["think"] is False
+    assert root_agent.model._additional_args["num_ctx"] == 8192
+    assert root_agent.model._additional_args["num_predict"] == 2048
 
 
 def test_load_paper_for_analysis_returns_error_for_missing_file():
@@ -43,6 +50,8 @@ def test_load_paper_for_analysis_allows_file_inside_allowed_dir(monkeypatch, tmp
     assert result["ok"] is True
     assert result["title"] == "paper"
     assert result["chunk_count"] == 1
+    assert result["returned_chunk_count"] == 1
+    assert result["truncated"] is False
     assert result["chunks"][0]["text"] == "本文"
 
 
@@ -89,3 +98,17 @@ def test_load_paper_for_analysis_rejects_symlink_escape(monkeypatch, tmp_path):
 
     assert result["ok"] is False
     assert "outside the allowed directory" in result["error"]
+
+
+def test_load_paper_for_analysis_returns_all_chunks(monkeypatch, tmp_path):
+    paper = tmp_path / "paper.txt"
+    paper.write_text(("a" * 800) + "\n\n" + ("b" * 800) + "\n\n" + ("c" * 800), encoding="utf-8")
+    monkeypatch.setenv("PAPER_AGENT_ALLOWED_DIR", str(tmp_path))
+
+    result = load_paper_for_analysis(str(paper), max_chars=1000)
+
+    assert result["ok"] is True
+    assert result["chunk_count"] == 3
+    assert result["returned_chunk_count"] == 3
+    assert result["truncated"] is False
+    assert [chunk["chunk_index"] for chunk in result["chunks"]] == [0, 1, 2]
